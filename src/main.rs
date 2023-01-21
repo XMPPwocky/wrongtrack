@@ -47,6 +47,8 @@ struct MyEguiApp {
     normal_randomness: f32,
     color_randomness: f32,
     num_color_samples: usize,
+
+    drag_start_pos: egui::Pos2,
 }
 
 impl MyEguiApp {
@@ -62,6 +64,8 @@ impl MyEguiApp {
             normal_randomness: 0.5,
             color_randomness: 0.5,
             num_color_samples: 3,
+
+            drag_start_pos: egui::Pos2::ZERO,
         }
     }
 }
@@ -79,6 +83,8 @@ impl eframe::App for MyEguiApp {
         let mut rng = thread_rng();
         egui::SidePanel::right("right").show(ctx, |ui| {
             ui.heading("wrong!track!");
+            ui.hyperlink_to("source on GitHub", "https://github.com/XMPPwocky/wrongtrack");
+
             ui.monospace(format!("BSP nodes: {}", self.bsp.len()));
 
             if ui.button("CLEAR ALL").clicked() {
@@ -124,8 +130,41 @@ impl eframe::App for MyEguiApp {
                 self.bsp.split_at_point(rand_point, rand_normal, color);
             }
             ui.separator();
-            let sense = egui::Sense::focusable_noninteractive();
+            let sense = egui::Sense::click_and_drag();
             let (response, painter) = ui.allocate_painter(egui::Vec2::new(512.0, 512.0), sense);
+            if response.hovered() {
+                ui.ctx().output().cursor_icon = egui::CursorIcon::Crosshair;
+            }
+            if response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let response_size = response.rect.size();
+
+                    let mut rel_pos = (pos - response.rect.min)/response_size;
+                    
+                    let rand_normal = glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0)).normalize();
+                    let rand_color = glam::vec3(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
+
+                    self.bsp.split_at_point(<[f32; 2] as From<_>>::from(rel_pos).into(), rand_normal, rand_color);
+                }
+            }
+            if response.drag_started() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    self.drag_start_pos = pos;
+                }
+            }
+            if response.drag_released() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let response_size = response.rect.size();
+
+                    let middle_pos = (pos + self.drag_start_pos.to_vec2()).to_vec2() * 0.5;
+                    let mut rel_pos = (middle_pos - response.rect.min.to_vec2())/response_size;
+                  
+                    let rand_color = glam::vec3(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
+
+                    let drag_normal = (pos - self.drag_start_pos).normalized();
+                    self.bsp.split_at_point(<[f32; 2] as From<_>>::from(rel_pos).into(), <[f32; 2] as From<_>>::from(drag_normal).into(), rand_color);
+                }
+            }
 
             let outer_poly =
                 bsp::Polygon::new_rect(glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 1.0));

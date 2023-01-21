@@ -17,7 +17,7 @@ impl Plane {
         let start_dist = self.distance_to_point(start);
         let end_dist = self.distance_to_point(end);
 
-        if start_dist.signum() == end_dist.signum() {
+        if (start_dist > 0.0) == (end_dist > 0.0) {
             // both on the same side!
             println!("{:?} {:?} {:?} {:?}", start_dist, end_dist, start, end);
             return None;
