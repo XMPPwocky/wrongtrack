@@ -126,6 +126,30 @@ impl<T> Bsp<T> {
         self.root.clone()
     }
 
+    pub fn visit_leaf_ancestors<F>(&self, point: glam::Vec2, mut cb: F)
+        where F: FnMut(BspKey, &BspNode<T>) {
+
+        let mut node = self.root_key();
+
+        loop {
+            cb(node, &self.nodes[node]);
+
+            match &self.nodes[node] {
+                BspNode::Inode(inode) => {
+                    let dist = inode.plane.distance_to_point(point);
+                    if dist <= 0.0 {
+                        node = inode.le;
+                    } else {
+                        node = inode.gt;
+                    }
+                }
+                BspNode::Leaf(_) => {
+                    break;
+                }
+            }
+        }     
+    }
+
     pub fn leaf_index_for_point(&self, point: glam::Vec2) -> BspKey {
         let mut node = self.root_key();
 
@@ -176,6 +200,31 @@ impl<T> Bsp<T> {
             le: self.nodes.insert(self.nodes[index].clone()),
             gt: self.nodes.insert(BspNode::Leaf(BspLeaf(new_val))),
         });
+    }
+    pub fn unsplit_at_point(&mut self, point: Vec2) where T: Clone {
+        // horrific method for getting parent w/o parent pointer
+        let mut parent = self.root_key();
+        let mut leaf = self.root_key();
+        self.visit_leaf_ancestors(point, |key, _| {
+            parent = leaf;
+            leaf = key;
+        });
+
+        if leaf == self.root_key() {
+            return;
+        }
+
+        self.nodes.remove(leaf);
+
+        let sibling = match &self.nodes[parent] {
+            BspNode::Leaf(_) => unreachable!(),
+            BspNode::Inode(BspInode { le, gt, .. }) => {
+                if *le == leaf { *gt } else { *le }
+            }
+        };
+
+        self.nodes[parent] = self.nodes.remove(sibling).unwrap();
+        
     }
     pub fn visit_leaf_polygons<F>(&self, start: BspKey, clip: Polygon, cb: &mut F)
     where

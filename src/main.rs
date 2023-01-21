@@ -45,7 +45,8 @@ fn main() {
 #[derive(Debug, PartialEq, Eq)]
 enum Tool {
     Split,
-    Paint,
+    Unsplit,
+    Paint
 }
 struct MyEguiApp {
     // color
@@ -225,6 +226,7 @@ impl eframe::App for MyEguiApp {
                     }
                 }
                 ui.radio_value(&mut self.tool, Tool::Split, "Split");
+                ui.radio_value(&mut self.tool, Tool::Unsplit, "Unsplit");
                 ui.radio_value(&mut self.tool, Tool::Paint, "Paint");
             });
 
@@ -292,6 +294,20 @@ impl eframe::App for MyEguiApp {
                         *self.bsp.get_at_point_mut(rel_pos) = self.random_color(rel_pos);
                     }
                 }
+            } else if self.tool == Tool::Unsplit {
+                if response.hovered() {
+                    ui.ctx().output().cursor_icon = egui::CursorIcon::Crosshair;
+                }
+                if response.clicked() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let response_size = response.rect.size();
+
+                        let rel_pos = (pos - response.rect.min) / response_size;
+                        let rel_pos = <egui::Vec2 as Into<[f32; 2]>>::into(rel_pos).into();
+
+                        self.bsp.unsplit_at_point(rel_pos);
+                    }
+                }               
             }
 
             let outer_poly =
