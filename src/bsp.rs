@@ -165,6 +165,7 @@ impl<T> Bsp<T> {
         debug_assert!(normal.is_normalized());
 
         let index = self.leaf_index_for_point(point);
+
         let plane = Plane {
             normal,
             distance: point.dot(normal),

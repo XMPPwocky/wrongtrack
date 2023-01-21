@@ -1,7 +1,8 @@
+use base64::Engine;
 use bsp::Polygon;
 use eframe::egui;
+use palette::{IntoColor, Mix, Oklab, Srgb};
 use rand::prelude::*;
-use palette::{Oklab, Srgb, Mix, IntoColor};
 
 mod bsp;
 
@@ -88,14 +89,18 @@ impl MyEguiApp {
 }
 fn vec_to_color(v: Oklab) -> egui::Color32 {
     let v: Srgb = v.into_color();
-    
-    egui::Color32::from_rgb((v.red * 256.0) as u8, (v.green * 256.0) as u8, (v.blue * 256.0) as u8)
+
+    egui::Color32::from_rgb(
+        (v.red * 256.0) as u8,
+        (v.green * 256.0) as u8,
+        (v.blue * 256.0) as u8,
+    )
 }
 
 impl MyEguiApp {
     fn random_point_in_disk(&self, radius: f32) -> glam::Vec2 {
         let mut rng = thread_rng();
-        let angle = rng.gen_range(0.0..std::f32::consts::PI*2.0);
+        let angle = rng.gen_range(0.0..std::f32::consts::PI * 2.0);
         let distance = rng.gen_range(0.0..radius);
         let (x, y) = angle.sin_cos();
         glam::vec2(x, y) * distance
@@ -104,16 +109,15 @@ impl MyEguiApp {
     fn random_color(&self, point: glam::Vec2) -> Oklab {
         let mut rng = thread_rng();
         if self.override_color_enabled {
-            let oc = self.override_color
-                .to_srgb()
-                .map(|x| x as f32 / 256.0);
+            let oc = self.override_color.to_srgb().map(|x| x as f32 / 256.0);
             Srgb::from_components((oc[0], oc[1], oc[2])).into_color()
         } else {
             let random_color = Srgb::from_components((
                 rng.gen_range(0.0f32..1.0),
                 rng.gen_range(0.0f32..1.0),
-                rng.gen_range(0.0f32..1.0)
-            )).into_color();
+                rng.gen_range(0.0f32..1.0),
+            ))
+            .into_color();
             let mut sampled_color = Oklab::default();
             for _ in 0..self.num_color_samples {
                 let perturb = self.random_point_in_disk(0.05);
@@ -128,8 +132,10 @@ impl MyEguiApp {
     }
     fn random_normal(&self, point: glam::Vec2) -> glam::Vec2 {
         let mut rng = thread_rng();
-        let rand_normal =
-            glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0)).normalize();
+        let angle = rng.gen_range(0.0..std::f32::consts::PI * 2.0);
+        let (x, y) = angle.sin_cos();
+        let rand_normal = glam::vec2(x, y);
+
         let rand_normal =
             (point - glam::Vec2::new(0.5, 0.5)).lerp(rand_normal, self.normal_randomness);
         rand_normal.normalize()
@@ -152,6 +158,11 @@ impl eframe::App for MyEguiApp {
 
                 if ui.button("CLEAR ALL").clicked() {
                     self.bsp = bsp::Bsp::new(Oklab::new(1.0, 0.0, 0.0));
+                }
+
+                if ui.button("Export SVG").clicked() {
+                    let url = to_data_url(save_svg(&self.bsp));
+                    open_url_new_tab(ui.ctx(), &url);
                 }
 
                 let label = ui.label("Normal randomness").id;
@@ -201,6 +212,18 @@ impl eframe::App for MyEguiApp {
 
                     self.bsp.split_at_point(rand_point, rand_normal, rand_color);
                 }
+                if ui.button("SPLIT X100").clicked() {
+                    for _ in 0..100 {
+                        let rand_point =
+                            glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
+
+                        let rand_normal = self.random_normal(rand_point);
+
+                        let rand_color = self.random_color(rand_point);
+
+                        self.bsp.split_at_point(rand_point, rand_normal, rand_color);
+                    }
+                }
                 ui.radio_value(&mut self.tool, Tool::Split, "Split");
                 ui.radio_value(&mut self.tool, Tool::Paint, "Paint");
             });
@@ -221,7 +244,8 @@ impl eframe::App for MyEguiApp {
                         let rand_normal =
                             glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0))
                                 .normalize();
-                        let rand_color = self.random_color(<[f32; 2] as From<_>>::from(rel_pos).into());
+                        let rand_color =
+                            self.random_color(<[f32; 2] as From<_>>::from(rel_pos).into());
 
                         self.bsp.split_at_point(
                             <[f32; 2] as From<_>>::from(rel_pos).into(),
@@ -240,8 +264,7 @@ impl eframe::App for MyEguiApp {
                         let response_size = response.rect.size();
 
                         let middle_pos = (pos + self.drag_start_pos.to_vec2()).to_vec2() * 0.5;
-                        let rel_pos =
-                            (middle_pos - response.rect.min.to_vec2()) / response_size;
+                        let rel_pos = (middle_pos - response.rect.min.to_vec2()) / response_size;
                         let rel_pos = <[f32; 2] as From<_>>::from(rel_pos).into();
 
                         let rand_color = self.random_color(rel_pos);
@@ -252,18 +275,14 @@ impl eframe::App for MyEguiApp {
                         } else {
                             <[f32; 2] as From<_>>::from(drag_normal).into()
                         };
-                        self.bsp.split_at_point(
-                            rel_pos,
-                            drag_normal,
-                            rand_color,
-                        );
+                        self.bsp.split_at_point(rel_pos, drag_normal, rand_color);
                     }
                 }
             } else if self.tool == Tool::Paint {
                 if response.hovered() {
                     ui.ctx().output().cursor_icon = egui::CursorIcon::Crosshair;
                 }
-                if response.clicked() {
+                if response.is_pointer_button_down_on() {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let response_size = response.rect.size();
 
@@ -308,4 +327,71 @@ fn poly_to_egui_points(poly: &Polygon, out_rect: egui::Rect) -> Vec<egui::Pos2> 
             egui::Pos2::new(x, y)
         })
         .collect()
+}
+
+fn save_svg(bsp: &bsp::Bsp<Oklab>) -> Vec<u8> {
+    use svg::node::element::path::Data;
+    use svg::node::element::Path;
+    use svg::Document;
+
+    let mut document = Some(Document::new().set("viewBox", (0.0, 0.0, 1.0, 1.0)));
+
+    bsp.visit_leaf_polygons(
+        bsp.root_key(),
+        bsp::Polygon::new_rect(glam::Vec2::ZERO, glam::Vec2::ONE),
+        &mut |leaf, poly| {
+            let color: Srgb = leaf.0.into_color();
+            let color = format!(
+                "rgb({}, {}, {})",
+                (color.red * 256.0) as u8,
+                (color.green * 256.0) as u8,
+                (color.blue * 256.0) as u8
+            );
+
+            let mut data = Data::new();
+            data = data.move_to((poly.vertices[0].x, poly.vertices[0].y));
+            for vert in &poly.vertices[1..] {
+                data = data.line_to((vert.x, vert.y));
+            }
+            data = data.close();
+
+            let path = Path::new()
+                .set("fill", color)
+                .set("stroke", "none")
+                .set("stroke-width", 0)
+                .set("d", data);
+
+            document = Some(document.take().unwrap().add(path));
+        },
+    );
+
+    let mut w = Vec::new();
+    svg::write(&mut w, &document.unwrap()).unwrap();
+    w
+}
+
+fn to_data_url(data: Vec<u8>) -> String {
+    let data = base64::engine::general_purpose::STANDARD_NO_PAD.encode(data);
+    let url = format!("data:image/svg+xml;base64,{}", data);
+    url
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_url_new_tab(ctx: &egui::Context, url: &str) {
+    ctx.output().open_url(url);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_url_new_tab(_ctx: &egui::Context, url: &str) {
+    wasm::save_data_url(url.to_owned());
+}
+
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen(module = "/save.js")]
+    extern "C" {
+        pub fn save_data_url(x: String);
+    }
 }

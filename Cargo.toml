@@ -14,6 +14,8 @@ rand = "0.8"
 slotmap = "1.0"
 palette = "0.6"
 getrandom = { version = "0.2", features = ["js"] }
+svg = "0.13"
+base64 = "0.21"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
