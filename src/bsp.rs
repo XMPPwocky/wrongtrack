@@ -1,7 +1,6 @@
 use glam::*;
-use slotmap::SlotMap;
 use slotmap::new_key_type;
-
+use slotmap::SlotMap;
 
 #[derive(Debug, Clone)]
 pub struct Plane {
@@ -43,7 +42,9 @@ impl Polygon {
         }
     }
     pub fn clip_against_plane(&self, plane: &Plane, clipside_is_greater: bool) -> Polygon {
-        if self.vertices.len() == 0 { return self.clone() }
+        if self.vertices.len() == 0 {
+            return self.clone();
+        }
 
         assert!(self.vertices.len() >= 3);
 
@@ -68,8 +69,7 @@ impl Polygon {
         let mut prev = *self.vertices.last().unwrap();
         let mut prev_clipside = cmp_to_clipside(plane.distance_to_point(prev), 0.0);
         for &current in &self.vertices {
-            let current_clipside =
-                cmp_to_clipside(plane.distance_to_point(current), 0.0);
+            let current_clipside = cmp_to_clipside(plane.distance_to_point(current), 0.0);
 
             match (prev_clipside, current_clipside) {
                 (false, false) => {
@@ -116,14 +116,15 @@ impl<T> Bsp<T> {
         let mut nodes = SlotMap::with_key();
         let root = nodes.insert(BspNode::Leaf(BspLeaf(root_val)));
 
-        Bsp {
-            nodes,
-            root
-        }
+        Bsp { nodes, root }
     }
-    pub fn len(&self) -> usize { self.nodes.len() }
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
 
-    pub fn root_key(&self) -> BspKey { self.root.clone() }
+    pub fn root_key(&self) -> BspKey {
+        self.root.clone()
+    }
 
     pub fn leaf_index_for_point(&self, point: glam::Vec2) -> BspKey {
         let mut node = self.root_key();
@@ -147,25 +148,32 @@ impl<T> Bsp<T> {
     pub fn get_at_point(&self, point: Vec2) -> &T {
         match &self.nodes[self.leaf_index_for_point(point)] {
             BspNode::Inode(_) => unreachable!(),
-            BspNode::Leaf(l) => &l.0
+            BspNode::Leaf(l) => &l.0,
         }
     }
-    pub fn split_at_point(&mut self, point: Vec2, normal: Vec2, new_val: T) where T: Clone {
-        println!("{:?} {:?}", point, normal);
-
+    pub fn get_at_point_mut(&mut self, point: Vec2) -> &mut T {
+        let i = self.leaf_index_for_point(point);
+        match &mut self.nodes[i] {
+            BspNode::Inode(_) => unreachable!(),
+            BspNode::Leaf(l) => &mut l.0,
+        }
+    }
+    pub fn split_at_point(&mut self, point: Vec2, normal: Vec2, new_val: T)
+    where
+        T: Clone,
+    {
         debug_assert!(normal.is_normalized());
 
         let index = self.leaf_index_for_point(point);
         let plane = Plane {
             normal,
-            distance: point.dot(normal)
+            distance: point.dot(normal),
         };
-        println!("{:?} {:?}", plane, index);
 
         self.nodes[index] = BspNode::Inode(BspInode {
             plane,
             le: self.nodes.insert(self.nodes[index].clone()),
-            gt: self.nodes.insert(BspNode::Leaf(BspLeaf(new_val)))
+            gt: self.nodes.insert(BspNode::Leaf(BspLeaf(new_val))),
         });
     }
     pub fn visit_leaf_polygons<F>(&self, start: BspKey, clip: Polygon, cb: &mut F)
@@ -205,4 +213,3 @@ pub enum BspNode<T> {
     Inode(BspInode),
     Leaf(BspLeaf<T>),
 }
-

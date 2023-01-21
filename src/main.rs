@@ -1,10 +1,11 @@
-use bsp::{Polygon};
+use bsp::Polygon;
 use eframe::egui;
 use rand::prelude::*;
+use palette::{Oklab, Srgb, Mix, IntoColor};
 
 mod bsp;
 
-#[cfg(target_arch="wasm32")]
+#[cfg(target_arch = "wasm32")]
 fn main() {
     use wasm_bindgen::prelude::*;
 
@@ -23,14 +24,14 @@ fn main() {
         eframe::start_web(
             "canvas", // hardcode it
             web_options,
-            Box::new(|cc| Box::new(MyEguiApp::new(cc)))
+            Box::new(|cc| Box::new(MyEguiApp::new(cc))),
         )
         .await
         .expect("failed to start eframe");
     });
 }
 
-#[cfg(not(target_arch="wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
@@ -40,15 +41,25 @@ fn main() {
     );
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Tool {
+    Split,
+    Paint,
+}
 struct MyEguiApp {
     // color
-    bsp: bsp::Bsp<glam::Vec3>,
+    bsp: bsp::Bsp<Oklab>,
 
     normal_randomness: f32,
     color_randomness: f32,
     num_color_samples: usize,
 
     drag_start_pos: egui::Pos2,
+
+    override_color_enabled: bool,
+    override_color: egui::epaint::Hsva,
+
+    tool: Tool,
 }
 
 impl MyEguiApp {
@@ -58,111 +69,209 @@ impl MyEguiApp {
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
 
-        let bsp = bsp::Bsp::new(glam::Vec3::ONE);
+        let bsp = bsp::Bsp::new(Oklab::new(1.0, 0.0, 0.0));
 
-        MyEguiApp { bsp,
+        MyEguiApp {
+            bsp,
+
             normal_randomness: 0.5,
             color_randomness: 0.5,
             num_color_samples: 3,
+            override_color_enabled: false,
+            override_color: egui::epaint::Hsva::default(),
 
             drag_start_pos: egui::Pos2::ZERO,
+
+            tool: Tool::Split,
         }
     }
 }
-fn vec_to_color(v: glam::Vec3) -> egui::Color32 {
-    let v = v * 256.0;
-    let r = v.x as u8;
-    let g = v.y as u8;
-    let b = v.z as u8;
-
-    egui::Color32::from_rgb(r, g, b)
+fn vec_to_color(v: Oklab) -> egui::Color32 {
+    let v: Srgb = v.into_color();
+    
+    egui::Color32::from_rgb((v.red * 256.0) as u8, (v.green * 256.0) as u8, (v.blue * 256.0) as u8)
 }
 
+impl MyEguiApp {
+    fn random_point_in_disk(&self, radius: f32) -> glam::Vec2 {
+        let mut rng = thread_rng();
+        let angle = rng.gen_range(0.0..std::f32::consts::PI*2.0);
+        let distance = rng.gen_range(0.0..radius);
+        let (x, y) = angle.sin_cos();
+        glam::vec2(x, y) * distance
+    }
+
+    fn random_color(&self, point: glam::Vec2) -> Oklab {
+        let mut rng = thread_rng();
+        if self.override_color_enabled {
+            let oc = self.override_color
+                .to_srgb()
+                .map(|x| x as f32 / 256.0);
+            Srgb::from_components((oc[0], oc[1], oc[2])).into_color()
+        } else {
+            let random_color = Srgb::from_components((
+                rng.gen_range(0.0f32..1.0),
+                rng.gen_range(0.0f32..1.0),
+                rng.gen_range(0.0f32..1.0)
+            )).into_color();
+            let mut sampled_color = Oklab::default();
+            for _ in 0..self.num_color_samples {
+                let perturb = self.random_point_in_disk(0.05);
+                let sample_point = (point + perturb).clamp(glam::Vec2::ZERO, glam::Vec2::ONE);
+                let sample = self.bsp.get_at_point(sample_point);
+                sampled_color += *sample;
+            }
+            sampled_color *= 1.0 / (self.num_color_samples as f32);
+
+            sampled_color.mix(&random_color, self.color_randomness)
+        }
+    }
+    fn random_normal(&self, point: glam::Vec2) -> glam::Vec2 {
+        let mut rng = thread_rng();
+        let rand_normal =
+            glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0)).normalize();
+        let rand_normal =
+            (point - glam::Vec2::new(0.5, 0.5)).lerp(rand_normal, self.normal_randomness);
+        rand_normal.normalize()
+    }
+}
 impl eframe::App for MyEguiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut rng = thread_rng();
-        egui::SidePanel::right("right").show(ctx, |ui| {
-            ui.heading("wrong!track!");
-            ui.hyperlink_to("source on GitHub", "https://github.com/XMPPwocky/wrongtrack");
 
-            ui.monospace(format!("BSP nodes: {}", self.bsp.len()));
+        egui::SidePanel::right("right")
+            .max_width(512.0)
+            .show(ctx, |ui| {
+                ui.heading("wrong!track!");
+                ui.hyperlink_to(
+                    "source on GitHub",
+                    "https://github.com/XMPPwocky/wrongtrack",
+                );
 
-            if ui.button("CLEAR ALL").clicked() {
-                self.bsp = bsp::Bsp::new(glam::Vec3::ONE);
-            }
+                ui.monospace(format!("BSP nodes: {}", self.bsp.len()));
 
-            let label = ui.label("Normal randomness").id;
-            ui.add(egui::widgets::Slider::new(&mut self.normal_randomness, 0.0..=1.0))
+                if ui.button("CLEAR ALL").clicked() {
+                    self.bsp = bsp::Bsp::new(Oklab::new(1.0, 0.0, 0.0));
+                }
+
+                let label = ui.label("Normal randomness").id;
+                ui.add(egui::widgets::Slider::new(
+                    &mut self.normal_randomness,
+                    0.0..=1.0,
+                ))
                 .labelled_by(label);
 
-            let label = ui.label("Color randomness").id;
-                ui.add(egui::widgets::Slider::new(&mut self.color_randomness, 0.0..=1.0))
-                    .labelled_by(label);
-            
-            let label = ui.label("Num. color samples").id;
-                ui.add(egui::widgets::DragValue::new(&mut self.num_color_samples).clamp_range(1..=8))
-                    .labelled_by(label);
+                ui.heading("Color");
 
-        });
+                let label = ui.label("Color randomness").id;
+                ui.add(egui::widgets::Slider::new(
+                    &mut self.color_randomness,
+                    0.0..=1.0,
+                ))
+                .labelled_by(label);
+
+                let label = ui.label("Num. color samples").id;
+                ui.add(
+                    egui::widgets::DragValue::new(&mut self.num_color_samples).clamp_range(1..=64),
+                )
+                .labelled_by(label);
+
+                ui.group(|ui| {
+                    ui.checkbox(&mut self.override_color_enabled, "Override color?");
+                    ui.add_enabled_ui(self.override_color_enabled, |ui| {
+                        egui::widgets::color_picker::color_picker_hsva_2d(
+                            ui,
+                            &mut self.override_color,
+                            egui::widgets::color_picker::Alpha::Opaque,
+                        )
+                    });
+                });
+            });
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.separator();
 
-            if ui.button("RND SPLIT [R]").clicked() || ui.input().key_pressed(egui::Key::R) {
-                let rand_point = glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
+            ui.horizontal(|ui| {
+                if ui.button("RND SPLIT [R]").clicked() || ui.input().key_pressed(egui::Key::R) {
+                    let rand_point =
+                        glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
 
-                let rand_normal = glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0)).normalize();
-                let rand_normal = (rand_point - glam::Vec2::new(0.5, 0.5)).lerp(rand_normal, self.normal_randomness);
-                let rand_normal = rand_normal.normalize();
-                
-                let rand_color = glam::vec3(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
+                    let rand_normal = self.random_normal(rand_point);
 
+                    let rand_color = self.random_color(rand_point);
 
-                let mut nearby_color = glam::Vec3::ZERO;
-                for _ in 0..self.num_color_samples {
-                    let sample_point = (rand_point + 0.05 * glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0))).clamp(glam::Vec2::ZERO, glam::Vec2::ONE);
-                    let sample_color = self.bsp.get_at_point(sample_point);
-                    nearby_color += *sample_color * (1.0 / self.num_color_samples as f32);
+                    self.bsp.split_at_point(rand_point, rand_normal, rand_color);
                 }
-            
-                let color = nearby_color.lerp(rand_color, self.color_randomness);
+                ui.radio_value(&mut self.tool, Tool::Split, "Split");
+                ui.radio_value(&mut self.tool, Tool::Paint, "Paint");
+            });
 
-
-                self.bsp.split_at_point(rand_point, rand_normal, color);
-            }
             ui.separator();
             let sense = egui::Sense::click_and_drag();
             let (response, painter) = ui.allocate_painter(egui::Vec2::new(512.0, 512.0), sense);
-            if response.hovered() {
-                ui.ctx().output().cursor_icon = egui::CursorIcon::Crosshair;
-            }
-            if response.clicked() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let response_size = response.rect.size();
-
-                    let mut rel_pos = (pos - response.rect.min)/response_size;
-                    
-                    let rand_normal = glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0)).normalize();
-                    let rand_color = glam::vec3(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
-
-                    self.bsp.split_at_point(<[f32; 2] as From<_>>::from(rel_pos).into(), rand_normal, rand_color);
+            if self.tool == Tool::Split {
+                if response.hovered() {
+                    ui.ctx().output().cursor_icon = egui::CursorIcon::Crosshair;
                 }
-            }
-            if response.drag_started() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    self.drag_start_pos = pos;
+                if response.clicked() && !response.drag_released() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let response_size = response.rect.size();
+
+                        let rel_pos = (pos - response.rect.min) / response_size;
+
+                        let rand_normal =
+                            glam::Vec2::new(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0))
+                                .normalize();
+                        let rand_color = self.random_color(<[f32; 2] as From<_>>::from(rel_pos).into());
+
+                        self.bsp.split_at_point(
+                            <[f32; 2] as From<_>>::from(rel_pos).into(),
+                            rand_normal,
+                            rand_color,
+                        );
+                    }
                 }
-            }
-            if response.drag_released() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let response_size = response.rect.size();
+                if response.drag_started() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        self.drag_start_pos = pos;
+                    }
+                }
+                if response.drag_released() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let response_size = response.rect.size();
 
-                    let middle_pos = (pos + self.drag_start_pos.to_vec2()).to_vec2() * 0.5;
-                    let mut rel_pos = (middle_pos - response.rect.min.to_vec2())/response_size;
-                  
-                    let rand_color = glam::vec3(rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0), rng.gen_range(0.0f32..1.0));
+                        let middle_pos = (pos + self.drag_start_pos.to_vec2()).to_vec2() * 0.5;
+                        let rel_pos =
+                            (middle_pos - response.rect.min.to_vec2()) / response_size;
+                        let rel_pos = <[f32; 2] as From<_>>::from(rel_pos).into();
 
-                    let drag_normal = (pos - self.drag_start_pos).normalized();
-                    self.bsp.split_at_point(<[f32; 2] as From<_>>::from(rel_pos).into(), <[f32; 2] as From<_>>::from(drag_normal).into(), rand_color);
+                        let rand_color = self.random_color(rel_pos);
+
+                        let drag_normal = (pos - self.drag_start_pos).normalized();
+                        let drag_normal = if drag_normal.length_sq() < 1e-6 {
+                            self.random_normal(rel_pos)
+                        } else {
+                            <[f32; 2] as From<_>>::from(drag_normal).into()
+                        };
+                        self.bsp.split_at_point(
+                            rel_pos,
+                            drag_normal,
+                            rand_color,
+                        );
+                    }
+                }
+            } else if self.tool == Tool::Paint {
+                if response.hovered() {
+                    ui.ctx().output().cursor_icon = egui::CursorIcon::Crosshair;
+                }
+                if response.clicked() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let response_size = response.rect.size();
+
+                        let rel_pos = (pos - response.rect.min) / response_size;
+                        let rel_pos = <egui::Vec2 as Into<[f32; 2]>>::into(rel_pos).into();
+
+                        *self.bsp.get_at_point_mut(rel_pos) = self.random_color(rel_pos);
+                    }
                 }
             }
 
@@ -172,7 +281,6 @@ impl eframe::App for MyEguiApp {
             self.bsp
                 .visit_leaf_polygons(self.bsp.root_key(), outer_poly, &mut |leaf, poly| {
                     let fill_color = leaf;
-
 
                     let shapy = egui::Shape::Path(egui::epaint::PathShape {
                         closed: true,
